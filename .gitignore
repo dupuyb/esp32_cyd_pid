@@ -1,2 +1,13 @@
-.pio
+.pio/
 .vscode/
+.history/
+
+# macOS
+.DS_Store
+
+# Generic build outputs
+build/
+**/build/
+*.elf
+*.bin
+*.map

@@ -6,7 +6,6 @@
 #include <math.h>
 
 // ============== Framework and Core Includes ==============
-// #define DEBUG_FRAMEWEB
 #include "FrameWeb.h"
 FrameWeb frame; // Web server and configuration framework instance
 
