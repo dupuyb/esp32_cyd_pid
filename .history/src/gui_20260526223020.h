@@ -1,0 +1,101 @@
+#pragma once
+
+#include <lvgl.h>
+
+#define LV_DELAY(x)                                   \
+  do {                                                \
+    uint32_t t = x;                                   \
+    while (t--) {                                     \
+      lv_timer_handler();                             \
+      delay(1);                                       \
+    }                                                 \
+  } while (0);
+
+typedef struct {
+  float * value;
+  float step;
+  float min_value;
+  float max_value;
+  lv_obj_t * label;
+  const char * name;
+} pid_adjust_ctx_t;
+
+
+static void update_pid_value_label(lv_obj_t * label, float value) {
+  char value_text[16];
+  lv_snprintf(value_text, sizeof(value_text), "%.3f", value);
+  lv_label_set_text(label, value_text);
+}
+
+static void pid_adjust_button_event_callback(lv_event_t * e) {
+  if(lv_event_get_code(e) != LV_EVENT_CLICKED) {
+    return;
+  }
+
+  pid_adjust_ctx_t * ctx = (pid_adjust_ctx_t *)lv_event_get_user_data(e);
+  float new_value = *(ctx->value) + ctx->step;
+  if(new_value < ctx->min_value) {
+    new_value = ctx->min_value;
+  }
+  if(new_value > ctx->max_value) {
+    new_value = ctx->max_value;
+  }
+
+  *(ctx->value) = new_value;
+  update_pid_value_label(ctx->label, new_value);
+  LV_LOG_USER("%s changed to %.3f", ctx->name, new_value);
+}
+
+static void create_pid_adjuster (
+  lv_obj_t * parent,
+  int y,
+  const char * caption,
+  lv_obj_t ** value_label,
+  float * value,
+  float step,
+  float min_value,
+  float max_value,
+  pid_adjust_ctx_t * ctx_minus,
+  pid_adjust_ctx_t * ctx_plus,
+  const char * name
+) {
+  lv_obj_t * label_caption = lv_label_create(parent);
+  lv_label_set_text(label_caption, caption);
+  lv_obj_set_pos(label_caption, 8, y + 4);
+
+  *value_label = lv_label_create(parent);
+  lv_obj_set_style_text_color(*value_label, lv_color_hex(0x0F3D5E), 0);
+  lv_obj_set_pos(*value_label, 85, y + 4);
+  update_pid_value_label(*value_label, *value);
+
+  lv_obj_t * btn_minus = lv_button_create(parent);
+  lv_obj_set_size(btn_minus, 26, 22);
+  lv_obj_set_pos(btn_minus, 55, y);
+  lv_obj_t * lbl_minus = lv_label_create(btn_minus);
+  lv_label_set_text(lbl_minus, "<<");
+  lv_obj_center(lbl_minus);
+
+  lv_obj_t * btn_plus = lv_button_create(parent);
+  lv_obj_set_size(btn_plus, 26, 22);
+  lv_obj_set_pos(btn_plus, 130, y);
+  lv_obj_t * lbl_plus = lv_label_create(btn_plus);
+  lv_label_set_text(lbl_plus, ">>");
+  lv_obj_center(lbl_plus);
+
+  ctx_minus->value = value;
+  ctx_minus->step = -step;
+  ctx_minus->min_value = min_value;
+  ctx_minus->max_value = max_value;
+  ctx_minus->label = *value_label;
+  ctx_minus->name = name;
+
+  ctx_plus->value = value;
+  ctx_plus->step = step;
+  ctx_plus->min_value = min_value;
+  ctx_plus->max_value = max_value;
+  ctx_plus->label = *value_label;
+  ctx_plus->name = name;
+
+  lv_obj_add_event_cb(btn_minus, pid_adjust_button_event_callback, LV_EVENT_CLICKED, ctx_minus);
+  lv_obj_add_event_cb(btn_plus, pid_adjust_button_event_callback, LV_EVENT_CLICKED, ctx_plus);
+}
