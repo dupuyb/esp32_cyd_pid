@@ -5,6 +5,7 @@ ESP32 CYD project with:
 - DHT22 temperature/humidity reading
 - PID control loop
 - PWM output for VMC/fan driving
+- Backlight dimming on screen saver (GPIO21)
 - Esp32_Framework integration (WiFi manager, web tools, websocket stack, embedded HTML pipeline)
 
 ## Relation with Esp32_Framework
@@ -39,6 +40,8 @@ In short, Esp32_CYD_Pid provides the control logic (sensor + PID + UI), while Es
 - Touch slider for setpoint (25.0 C to 45.0 C)
 - On-screen tuning controls for Kp / Ki / Kd
 - Manual VMC switch behavior when PID is disabled
+- Screen saver page with automatic backlight dimming (20%) and restore on touch (100%)
+- Screen saver is blocked during startup while MAC label is still visible (initialization guard)
 - Dynamic externalHtmlTools content showing:
   - temperatures
   - V.M.C state
@@ -65,6 +68,7 @@ In short, Esp32_CYD_Pid provides the control logic (sensor + PID + UI), while Es
   - CS: GPIO33
 - DHT22 data pin: GPIO27
 - PWM output pin: GPIO22
+- TFT backlight pin: GPIO21 (LEDC PWM)
 - VMC active output pin: GPIO26
 - Optional RGB LED pins (board dependent): GPIO4 / GPIO16 / GPIO17
 
@@ -77,6 +81,10 @@ pio run -e esp32dev
 pio run -e esp32dev -t upload
 pio device monitor -b 115200
 ```
+
+If `pio` is not available in your shell, use VS Code PlatformIO tasks:
+- PlatformIO: Build (Esp32_CYD_Pid)
+- PlatformIO: Upload (Esp32_CYD_Pid)
 
 Optional cleanup:
 
@@ -126,6 +134,9 @@ Dependencies include LVGL, TFT_eSPI, DHTesp, XPT2046_Touchscreen, WiFiManager, W
 5. PWM duty is updated and mirrored in the UI.
 6. externalHtmlTools content is refreshed with live process values.
 7. Time and network labels are refreshed in loop.
+8. While the MAC label is visible (startup/incomplete init), screen saver activation is intentionally blocked.
+9. After initialization is complete, screen saver is activated after inactivity timeout and dims backlight to 20%.
+10. Any touch restores dashboard page and backlight to 100%.
 
 ## Framework Callbacks
 
@@ -155,6 +166,12 @@ They are currently minimal and can be extended for project-specific web behavior
   - verify frame.loop() is called continuously in loop()
   - verify externalHtmlTools assignment happens after control values are updated
   - clean and rebuild to regenerate framework web assets
+- Backlight does not dim in screen saver:
+  - verify TFT backlight is wired to GPIO21 on your CYD variant
+  - verify no other library code overrides GPIO21 duty-cycle after setup
+- Screen saver never starts:
+  - check whether MAC label remains visible (network/time init not finalized)
+  - verify update_access_network_labels() hides MAC once IP and time are valid
 - Touch coordinates feel mirrored:
   - review touchscreen rotation/calibration in src/main.cpp
 - No DHT values:
