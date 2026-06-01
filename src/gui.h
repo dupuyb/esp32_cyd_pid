@@ -4,11 +4,9 @@
 #define GUI_H_
 
 #include "Arduino.h"
-#include <DHTesp.h>
 #include <lvgl.h>
 
 // Shared runtime state used by the GUI and control logic.
-static DHTesp g_dht;
 static uint32_t g_last_pid_compute_ms = 0;
 
 // Main page widgets.
@@ -184,11 +182,20 @@ static void update_access_network_labels(String ip, String mac) {
 }
 
 static void set_pwm_percent(uint32_t duty, uint8_t pinOF, float percent) {
+  bool output_active = (duty > 0U);
+  // Always drive the hardware output, even before UI objects are created.
+  digitalWrite(pinOF, output_active ? HIGH : LOW);
+
   // Visual PWM feedback:green LED when output is active, white otherwise.
   if (g_led_pwm_state != NULL) {
-    lv_color_t led_color = (duty > 0U) ? lv_color_hex(0x16A34A) : lv_color_hex(0xFFFFFF);
+    lv_color_t led_color = output_active ? lv_color_hex(0x16A34A) : lv_color_hex(0xFFFFFF);
     lv_obj_set_style_bg_color(g_led_pwm_state, led_color, 0);
-    digitalWrite(pinOF, (duty > 0U) ? HIGH : LOW);
+  }
+
+  // Screen saver state reflects the real output state, not the manual switch.
+  if (g_label_ss_vmc != NULL) {
+    lv_label_set_text(g_label_ss_vmc, output_active ? "VMC ON" : "VMC OFF");
+    lv_obj_set_style_text_color(g_label_ss_vmc, output_active ? lv_color_hex(0x107C10) : lv_color_hex(0xC32F27), 0);
   }
 
   if (g_label_pwm_value != NULL) {
@@ -225,11 +232,6 @@ static void control_slider_callback(char *temp_text, float g_setpoint_temp_c) {
 static void switch_callback(lv_obj_t *label, bool is_on) {
   lv_label_set_text(label, is_on ? "ON" : "OFF");
   lv_obj_set_style_text_color(label, is_on ? lv_color_hex(0x107C10) : lv_color_hex(0xC32F27), 0);
-
-  if (label == g_label_vmc_state && g_label_ss_vmc != NULL) {
-    lv_label_set_text(g_label_ss_vmc, is_on ? "VMC ON" : "VMC OFF");
-    lv_obj_set_style_text_color(g_label_ss_vmc, is_on ? lv_color_hex(0x107C10) : lv_color_hex(0xC32F27), 0);
-  }
 }
 
 static void vmc_switch_event_callback(lv_event_t *e);

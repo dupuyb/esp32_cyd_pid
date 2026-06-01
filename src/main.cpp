@@ -1,6 +1,7 @@
 #include "gui.h"
 #include <TFT_eSPI.h>
 #include <lvgl.h>
+#include <DHTesp.h>
 #include <math.h>
 
 // ============== Framework and Core Includes ==============
@@ -27,12 +28,13 @@ XPT2046_Touchscreen touchscreen(XPT2046_CS, XPT2046_IRQ);
 
 #define SCREEN_WIDTH 240
 #define SCREEN_HEIGHT 320
-#define DHT22_PIN 27
 #define PWM_OUTPUT_PIN 22
 #define PWM_CHANNEL 0
 #define PWM_FREQUENCY_HZ 20000
 #define PWM_RESOLUTION_BITS 8
 #define PWM_MAX_DUTY ((1 << PWM_RESOLUTION_BITS) - 1)
+#define DHT22_PIN 27
+static DHTesp g_dht;
 
 #define BACKLIGHT_PIN 21
 #define BACKLIGHT_PWM_CHANNEL 1
@@ -137,24 +139,9 @@ static void set_pwm_percent(float percent) {
 }
 
 static void turn_off_rgb_led(void) {
-#if RGB_LED_ACTIVE_HIGH
-  const int off_level = LOW;
-#else
-  const int off_level = HIGH;
-#endif
-
-#if RGB_LED_R_PIN != PWM_OUTPUT_PIN
-  pinMode(RGB_LED_R_PIN, OUTPUT);
-  digitalWrite(RGB_LED_R_PIN, off_level);
-#endif
-#if RGB_LED_G_PIN != PWM_OUTPUT_PIN
-  pinMode(RGB_LED_G_PIN, OUTPUT);
-  digitalWrite(RGB_LED_G_PIN, off_level);
-#endif
-#if RGB_LED_B_PIN != PWM_OUTPUT_PIN
-  pinMode(RGB_LED_B_PIN, OUTPUT);
-  digitalWrite(RGB_LED_B_PIN, off_level);
-#endif
+  digitalWrite(RGB_LED_R_PIN, HIGH);
+  digitalWrite(RGB_LED_G_PIN, HIGH);
+  digitalWrite(RGB_LED_B_PIN, HIGH);
 }
 
 static void compute_pid_and_drive_output(void) {
@@ -176,8 +163,8 @@ static void compute_pid_and_drive_output(void) {
   }
   g_last_pid_compute_ms = now;
 
-  // Classic PID terms computed in engineering units (degC error and seconds).
-  float error = g_setpoint_temp_c - g_current_temp_c;
+  // In cooling mode: positive error means room is hotter than setpoint.
+  float error = g_current_temp_c - g_setpoint_temp_c;
   g_pid_integral += error * dt_sec;
 
   // Anti wind-up for bounded 0-100% output.
@@ -197,6 +184,8 @@ static void compute_pid_and_drive_output(void) {
   g_pid_prev_error = error;
   g_pid_has_prev_error = true;
 
+  Serial.printf("PID compute: error=%.2f C, integral=%.2f, derivative=%.2f, output=%.2f%%\n", error, g_pid_integral, derivative, pid_output);
+
   set_pwm_percent(pid_output);
 }
 
@@ -207,16 +196,16 @@ static void update_dht_values() {
     LV_LOG_USER("DHT22 read failed");
     return;
   }
+  Serial.printf("DHT22 read: temperature=%.1f C, humidity=%.0f%%\n", data.temperature, data.humidity);  
+
   update_dht_values(data.temperature, data.humidity);
   g_current_temp_c = data.temperature;
-
   compute_pid_and_drive_output();
 }
 
 static void control_slider_event_callback(lv_event_t *e) {
   lv_obj_t *slider = (lv_obj_t *)lv_event_get_target(e);
-  // Slider stores tenth-degrees to avoid float rounding artifacts in UI
-  // interactions.
+  // Slider stores tenth-degrees to avoid float rounding artifacts in UI interactions.
   int control_temp_tenth = (int)lv_slider_get_value(slider); // 25.0 C to 45.0 C
   char temp_text[12];
   format_temp_1_decimal(temp_text, sizeof(temp_text), control_temp_tenth);
@@ -326,10 +315,17 @@ void IRAM_ATTR startingTask(void *pvParameter) {
   LV_LOG_USER("deleted");
 }
 
+
+
 void setup() {
   String LVGL_Arduino = String("LVGL Library Version: ") + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
   Serial.begin(115200);
+
+  delay(200);
   Serial.println(LVGL_Arduino);
+
+  // Initialize DHT sensor on pin GPIO27
+  g_dht.setup(DHT22_PIN, DHTesp::DHT22);
 
   // Try to keep onboard RGB LED off at startup.
   turn_off_rgb_led();
@@ -352,20 +348,13 @@ void setup() {
   // Initialize the TFT display using the TFT_eSPI library
   disp = lv_tft_espi_create(SCREEN_WIDTH, SCREEN_HEIGHT, draw_buf, sizeof(draw_buf));
   // CYD is physically portrait but GUI layout is designed in landscape coordinates.
-  lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_270);
+  lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90);
 
   // Initialize an LVGL input device object (Touchscreen)
   lv_indev_t *indev = lv_indev_create();
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   // Set the callback function to read Touchscreen input
   lv_indev_set_read_cb(indev, touchscreen_read);
-
-  // Initialize DHT sensor on pin GPIO27
-  g_dht.setup(DHT22_PIN, DHTesp::DHT22);
-
-  // Initialize PWM output on GPIO4, duty 0..255 for 0..100%.
-  ledcSetup(PWM_CHANNEL, PWM_FREQUENCY_HZ, PWM_RESOLUTION_BITS);
-  ledcAttachPin(PWM_OUTPUT_PIN, PWM_CHANNEL);
 
   // Display backlight control on GPIO21.
   ledcSetup(BACKLIGHT_PWM_CHANNEL, PWM_FREQUENCY_HZ, PWM_RESOLUTION_BITS);
@@ -382,13 +371,14 @@ void setup() {
   // Start the WiFi connection and web server in a separate task to avoid blocking
   LV_LOG_USER("Thread connectTask starting...");
   xTaskCreate(&startingTask, "startingTask", 4096, NULL, WIFI_TASK_PRIORITY, &wifiCxHandle);
+
 }
 
 void loop() {
   // Keep FrameWeb services running once the startup task has completed.
   // Update FrameWeb framework (web server, WebSocket, etc.)
-  if (wifiCxHandle == NULL)
-    frame.loop();
+  // if (wifiCxHandle == NULL)
+  frame.loop();
 
   // LVGL timing loop: process events then advance internal tick base.
   lv_task_handler(); // let the GUI do its work
@@ -442,5 +432,7 @@ void loop() {
         g_backlight_dimmed = false;
       }
     }
+
+
   }
 }
