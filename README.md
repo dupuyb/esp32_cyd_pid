@@ -1,5 +1,8 @@
 # Esp32_CYD_Pid
 
+ESP32_CYD_Pid is an ESP32 CYD firmware project focused on temperature-driven fan control with a touch-based LVGL interface.
+It combines PID regulation, DHT22 sensing, PWM fan output, and display backlight management into a compact embedded application.
+
 ## Changelog
 
 - 2026-06-03
