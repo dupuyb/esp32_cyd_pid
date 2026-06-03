@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ESP32 PID Control</title>
+  <script src="/pid.js" defer></script>
+  <style>
+    :root {
+      --bg-1: #071b2b;
+      --bg-2: #10344d;
+      --panel: #f6fbff;
+      --ink: #0f2a3a;
+      --muted: #526d7b;
+      --accent: #0ea5e9;
+      --accent-2: #22c55e;
+      --danger: #ef4444;
+      --line: #d9e7f0;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      min-height: 100%;
+      font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+      background: linear-gradient(160deg, var(--bg-1), var(--bg-2));
+      color: var(--ink);
+    }
+
+    body {
+      padding: 16px;
+    }
+
+    .layout {
+      max-width: 1024px;
+      margin: 0 auto;
+      display: grid;
+      gap: 14px;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+    }
+
+    .card {
+      grid-column: span 12;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      box-shadow: 0 10px 24px rgba(3, 18, 31, 0.18);
+    }
+
+    .title {
+      margin: 0 0 10px;
+      font-size: 1.1rem;
+      color: #0c3a57;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .badge {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px;
+      background: #ffffff;
+    }
+
+    .label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .value {
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin-top: 4px;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .control {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    input[type="number"] {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid #bfd4e2;
+      padding: 9px;
+      font-size: 1rem;
+      color: var(--ink);
+      background: #fff;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      padding: 10px 14px;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: #475569;
+    }
+
+    #pidState {
+      font-weight: 700;
+    }
+
+    #pidState.on {
+      color: var(--accent-2);
+    }
+
+    #pidState.off {
+      color: var(--danger);
+    }
+
+    #chart {
+      width: 100%;
+      height: 320px;
+      border: 1px solid #c6d9e6;
+      border-radius: 10px;
+      background: #fff;
+      display: block;
+    }
+
+    .legend {
+      margin-top: 8px;
+      font-size: 0.9rem;
+      color: var(--muted);
+      display: flex;
+      gap: 16px;
+    }
+
+    .legend span::before {
+      content: "";
+      display: inline-block;
+      width: 14px;
+      height: 3px;
+      margin-right: 6px;
+      vertical-align: middle;
+      border-radius: 2px;
+    }
+
+    .legend .temp::before {
+      background: #ef4444;
+    }
+
+    .legend .pwm::before {
+      background: #22c55e;
+    }
+
+    #wsStatus {
+      color: #dbeafe;
+      text-align: center;
+      margin-top: 8px;
+      font-size: 0.9rem;
+    }
+
+    @media (max-width: 760px) {
+      .status-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .controls {
+        grid-template-columns: 1fr;
+      }
+
+      #chart {
+        height: 250px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="layout">
+    <section class="card">
+      <h1 class="title">PID Controller Dashboard</h1>
+      <div class="status-grid">
+        <div class="badge">
+          <div class="label">Current Temperature</div>
+          <div class="value" id="currentTemp">--.- C</div>
+        </div>
+        <div class="badge">
+          <div class="label">Setpoint</div>
+          <div class="value" id="currentSetpoint">--.- C</div>
+        </div>
+        <div class="badge">
+          <div class="label">Humidity</div>
+          <div class="value" id="humidity">-- %</div>
+        </div>
+        <div class="badge">
+          <div class="label">Control Output</div>
+          <div class="value" id="pwm">-- %</div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <span class="label">PID Status:</span>
+        <span id="pidState" class="off">OFF</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2 class="title">Tuning</h2>
+      <div class="controls">
+        <label class="control">Setpoint (C)
+          <input id="setpoint" type="number" min="25" max="45" step="0.1">
+        </label>
+        <label class="control">Kp
+          <input id="kp" type="number" min="0" max="25" step="0.001">
+        </label>
+        <label class="control">Ki
+          <input id="ki" type="number" min="0" max="50" step="0.001">
+        </label>
+        <label class="control">Kd
+          <input id="kd" type="number" min="0" max="50" step="0.001">
+        </label>
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <label>
+          <input id="pidEnabled" type="checkbox">
+          Enable PID
+        </label>
+        <label>
+          <input id="vmcManualOn" type="checkbox">
+          Manual ventilation
+        </label>
+        <button id="applyBtn" type="button">Apply Values</button>
+        <button id="refreshBtn" type="button" class="secondary">Refresh</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2 class="title">Temperature / Control History</h2>
+      <canvas id="chart" width="980" height="320"></canvas>
+      <div class="legend">
+        <span class="temp">Temperature (C)</span>
+        <span class="pwm">Control Output (%)</span>
+      </div>
+    </section>
+  </main>
+  <div id="wsStatus">WebSocket: connecting...</div>
+</body>
+</html>

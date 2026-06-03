@@ -1,7 +1,9 @@
 #include "gui.h"
+#include "main.h"
 #include <TFT_eSPI.h>
 #include <lvgl.h>
 #include <DHTesp.h>
+#include <ArduinoJson.h>
 #include <math.h>
 
 // ============== Framework and Core Includes ==============
@@ -28,26 +30,39 @@ XPT2046_Touchscreen touchscreen(XPT2046_CS, XPT2046_IRQ);
 
 #define SCREEN_WIDTH 240
 #define SCREEN_HEIGHT 320
-#define PWM_OUTPUT_PIN 22
+
+// DHT22 pin to sensor.
+#define DHT22_PIN 27
+// LED RGB pins
+#define RGB_LED_R_PIN 4
+#define RGB_LED_G_PIN 16
+#define RGB_LED_B_PIN 17
+// Backlight control pin
+#define BACKLIGHT_PIN 21
+// Fan PWM output pin (LEDC attached in setup)
+#define VMC_PWM_PIN 22
+
+// LEDC channel used for fan PWM output.
 #define PWM_CHANNEL 0
 #define PWM_FREQUENCY_HZ 20000
 #define PWM_RESOLUTION_BITS 8
 #define PWM_MAX_DUTY ((1 << PWM_RESOLUTION_BITS) - 1)
-#define DHT22_PIN 27
-static DHTesp g_dht;
-
-#define BACKLIGHT_PIN 21
+// Backlight PWM settings
 #define BACKLIGHT_PWM_CHANNEL 1
 #define BACKLIGHT_BRIGHT_PERCENT_ACTIVE 100.0f
 #define BACKLIGHT_BRIGHT_PERCENT_SCREENSAVER 20.0f
+#define WEB_HISTORY_POINTS 60
 
-#define VMC_ACTIVE_OUT_PIN 26
-
-// CYD boards often expose a discrete RGB LED on these GPIOs.
-#define RGB_LED_R_PIN 4
-#define RGB_LED_G_PIN 16
-#define RGB_LED_B_PIN 17
+// RGB LED on these GPIOs.
 #define RGB_LED_ACTIVE_HIGH 0
+
+// Temperature and humidity control variables
+static DHTesp g_dht;
+static float g_temp_history[WEB_HISTORY_POINTS];
+static float g_pwm_history[WEB_HISTORY_POINTS];
+static size_t g_history_head = 0;
+static size_t g_history_count = 0;
+static int g_websocket_client_num = -1;
 
 // Touchscreen coordinates: (x, y) and pressure (z)
 int x, y, z;
@@ -74,7 +89,7 @@ const char *ntpServer = "pool.ntp.org";
 // counter for flow duration in seconds
 long previousMillis = 0;
 int refresh_sensor_counter = 0;
-#define delayToGotToSaveScrenn 2 * 60
+#define delayToGotToSaveScrenn 5 * 60
 int touchPressed = delayToGotToSaveScrenn;
 // Tracks whether screen saver dimming is currently applied.
 static bool g_backlight_dimmed = false;
@@ -96,6 +111,7 @@ static void set_backlight_percent(float percent) {
 void touchscreen_read(lv_indev_t *indev, lv_indev_data_t *data) {
   // Checks if Touchscreen was touched, and prints X, Y and Pressure (Z)
   if (touchscreen.tirqTouched() && touchscreen.touched()) {
+
     // Get Touchscreen points
     TS_Point p = touchscreen.getPoint();
     // Calibrate Touchscreen points with map function to the correct width and height
@@ -122,6 +138,61 @@ static String formatIpAddress(const IPAddress &ip) {
   return ip.toString();
 }
 
+static void append_history_sample(float temperature_c, float pwm_percent) {
+  if (!isfinite(temperature_c) || !isfinite(pwm_percent)) {
+    return;
+  }
+
+  g_temp_history[g_history_head] = temperature_c;
+  g_pwm_history[g_history_head] = pwm_percent;
+  g_history_head = (g_history_head + 1) % WEB_HISTORY_POINTS;
+  if (g_history_count < WEB_HISTORY_POINTS) {
+    g_history_count++;
+  }
+}
+
+static void webSocketSendState(uint8_t num, bool include_history) {
+  JsonDocument readings;
+  readings["type"] = "pid_state";
+  readings["setpoint"] = g_setpoint_temp_c;
+  readings["temperature"] = g_current_temp_c;
+  readings["humidity"] = lv_label_get_text(g_label_humidity_value);
+  readings["pwm"] = g_pwm_percent;
+  readings["pidEnabled"] = g_pid_enabled;
+  readings["vmcManualOn"] = g_vmc_manual_on;
+  readings["kp"] = g_kp;
+  readings["ki"] = g_ki;
+  readings["kd"] = g_kd;
+
+  if (include_history) {
+    JsonArray temp_history = readings["historyTemp"].to<JsonArray>();
+    JsonArray pwm_history = readings["historyPwm"].to<JsonArray>();
+    size_t start = (g_history_head + WEB_HISTORY_POINTS - g_history_count) % WEB_HISTORY_POINTS;
+    for (size_t i = 0; i < g_history_count; i++) {
+      size_t idx = (start + i) % WEB_HISTORY_POINTS;
+      temp_history.add(g_temp_history[idx]);
+      pwm_history.add(g_pwm_history[idx]);
+    }
+  }
+
+  String json_string;
+
+  serializeJson(readings, json_string);
+  //LV_LOG_USER("WS send state -> client:%u bytes:%u", (unsigned)num, (unsigned)json_string.length());
+  //LV_LOG_USER("WS send payload: %s", json_string.c_str());
+  frame.webSocket.sendTXT(num, json_string);
+}
+
+static void webSocketSendError(uint8_t num, const char *message) {
+  JsonDocument response;
+  response["type"] = "error";
+  response["message"] = message;
+  String json_string;
+  serializeJson(response, json_string);
+  LV_LOG_USER("WS send error -> client:%u msg:%s", (unsigned)num, message);
+  frame.webSocket.sendTXT(num, json_string);
+}
+
 static void set_pwm_percent(float percent) {
   // Clamp command to a valid duty-cycle percentage before converting to timer ticks.
   if (percent < 0.0f) {
@@ -132,22 +203,24 @@ static void set_pwm_percent(float percent) {
   }
 
   g_pwm_percent = percent;
+  // Apply requested percent to fan PWM channel (GPIO22 via VMC_PWM_PIN mapping in setup).
   uint32_t duty = (uint32_t)((percent * (float)PWM_MAX_DUTY / 100.0f) + 0.5f);
   ledcWrite(PWM_CHANNEL, duty);
 
-  set_pwm_percent(duty, VMC_ACTIVE_OUT_PIN, percent);
+  set_pwm_values( percent);
+
+  update_graph_history(g_current_temp_c, g_pwm_percent);
 }
 
-static void turn_off_rgb_led(void) {
-  digitalWrite(RGB_LED_R_PIN, HIGH);
-  digitalWrite(RGB_LED_G_PIN, HIGH);
-  digitalWrite(RGB_LED_B_PIN, HIGH);
-}
-
-static void compute_pid_and_drive_output(void) {
+void compute_pid_and_drive_output(void) {
   // Fail-safe: if PID is disabled or sensor value is invalid, force output to 0%.
-  if (!g_pid_enabled || isnan(g_current_temp_c)) {
+  if ( isnan(g_current_temp_c)) {
     set_pwm_percent(0.0f);
+    return;
+  }
+
+  if (!g_pid_enabled ){
+    set_pwm_percent(g_vmc_manual_on ? 100.0f : 0.0f);
     return;
   }
 
@@ -183,10 +256,121 @@ static void compute_pid_and_drive_output(void) {
   float pid_output = (g_kp * error) + (g_ki * g_pid_integral) + (g_kd * derivative);
   g_pid_prev_error = error;
   g_pid_has_prev_error = true;
-
-  Serial.printf("PID compute: error=%.2f C, integral=%.2f, derivative=%.2f, output=%.2f%%\n", error, g_pid_integral, derivative, pid_output);
-
   set_pwm_percent(pid_output);
+}
+
+static void decodePidJsonAndApply(uint8_t num, uint8_t *payload, size_t length) {
+  //String payload_text;
+  //if (payload != NULL && length > 0U) {
+  //  payload_text = String((const char *)payload, length);
+  //} else {
+  //  payload_text = "";
+  //}
+  //LV_LOG_USER("WS recv payload <- client:%u bytes:%u", (unsigned)num, (unsigned)length);
+  //LV_LOG_USER("WS recv payload: %s", payload_text.c_str());
+
+  JsonDocument root;
+  DeserializationError error = deserializeJson(root, payload, length);
+  if (error) {
+    webSocketSendError(num, "Invalid JSON payload");
+    return;
+  }
+
+  bool need_recompute = false;
+  bool include_history = false;
+
+  if (root["request"].is<const char *>()) {
+    const char *request = root["request"];
+    include_history = (strcmp(request, "history") == 0 || strcmp(request, "full") == 0);
+  }
+
+  if (root["setpoint"].is<float>() || root["setpoint"].is<int>()) {
+    float value = root["setpoint"].as<float>();
+    if (value < 25.0f) {
+      value = 25.0f;
+    }
+    if (value > 45.0f) {
+      value = 45.0f;
+    }
+    g_setpoint_temp_c = value;
+    char temp_text[12];
+    int temp_tenth = (int)(g_setpoint_temp_c * 10.0f + 0.5f);
+    format_temp_1_decimal(temp_text, sizeof(temp_text), temp_tenth);
+    control_slider_callback(temp_text, g_setpoint_temp_c);
+    need_recompute = true;
+  }
+
+  if (root["kp"].is<float>() || root["kp"].is<int>()) {
+    float value = root["kp"].as<float>();
+    if (value < 0.0f) {
+      value = 0.0f;
+    }
+    if (value > 25.0f) {
+      value = 25.0f;
+    }
+    g_kp = value;
+    update_pid_value_label(g_label_kp_value, g_kp);
+    need_recompute = true;
+  }
+
+  if (root["ki"].is<float>() || root["ki"].is<int>()) {
+    float value = root["ki"].as<float>();
+    if (value < 0.0f) {
+      value = 0.0f;
+    }
+    if (value > 50.0f) {
+      value = 50.0f;
+    }
+    g_ki = value;
+    update_pid_value_label(g_label_ki_value, g_ki);
+    need_recompute = true;
+  }
+
+  if (root["kd"].is<float>() || root["kd"].is<int>()) {
+    float value = root["kd"].as<float>();
+    if (value < 0.0f) {
+      value = 0.0f;
+    }
+    if (value > 50.0f) {
+      value = 50.0f;
+    }
+    g_kd = value;
+    update_pid_value_label(g_label_kd_value, g_kd);
+    need_recompute = true;
+  }
+
+  if (root["pidEnabled"].is<bool>()) {
+    g_pid_enabled = root["pidEnabled"];
+    switch_callback(g_label_pid_state, g_pid_enabled);
+    if (!g_pid_enabled) {
+      g_pid_integral = 0.0f;
+      g_pid_prev_error = 0.0f;
+      g_pid_has_prev_error = false;
+      set_pwm_percent(g_vmc_manual_on ? 100.0f : 0.0f);
+    } else {
+      g_last_pid_compute_ms = 0;
+      need_recompute = true;
+    }
+  }
+
+  if (root["vmcManualOn"].is<bool>()) {
+    g_vmc_manual_on = root["vmcManualOn"];
+    switch_callback(g_label_vmc_state, g_vmc_manual_on);
+    if (!g_pid_enabled) {
+      set_pwm_percent(g_vmc_manual_on ? 100.0f : 0.0f);
+    }
+  }
+
+  if (need_recompute && g_pid_enabled) {
+    compute_pid_and_drive_output();
+  }
+  webSocketSendState(num, include_history);
+}
+
+static void turn_off_rgb_led(void) {
+  digitalWrite(RGB_LED_R_PIN, HIGH);
+  digitalWrite(RGB_LED_G_PIN, HIGH);
+  digitalWrite(RGB_LED_B_PIN, HIGH);
 }
 
 static void update_dht_values() {
@@ -196,11 +380,12 @@ static void update_dht_values() {
     LV_LOG_USER("DHT22 read failed");
     return;
   }
-  Serial.printf("DHT22 read: temperature=%.1f C, humidity=%.0f%%\n", data.temperature, data.humidity);  
+  //Serial.printf("DHT22 read: temperature=%.1f C, humidity=%.0f%%\n", data.temperature, data.humidity);  
 
   update_dht_values(data.temperature, data.humidity);
   g_current_temp_c = data.temperature;
   compute_pid_and_drive_output();
+  append_history_sample(g_current_temp_c, g_pwm_percent);
 }
 
 static void control_slider_event_callback(lv_event_t *e) {
@@ -224,7 +409,7 @@ static void pid_switch_event_callback(lv_event_t *e) {
     g_pid_integral = 0.0f;
     g_pid_prev_error = 0.0f;
     g_pid_has_prev_error = false;
-    // PID disabled: manual VMC switch controls output as 0% or 100%.
+    // PID disabled: manual ventilation switch controls output as 0% or 100%.
     set_pwm_percent(g_vmc_manual_on ? 100.0f : 0.0f);
   } else {
     g_last_pid_compute_ms = 0;
@@ -238,48 +423,18 @@ static void vmc_switch_event_callback(lv_event_t *e) {
   bool is_on = lv_obj_has_state(sw, LV_STATE_CHECKED);
   g_vmc_manual_on = is_on;
   switch_callback(g_label_vmc_state, is_on);
-  // VMC switch commands PWM only when PID mode is disabled.
+  // Ventilation switch commands PWM only when PID mode is disabled.
   if (!g_pid_enabled) {
     set_pwm_percent(is_on ? 100.0f : 0.0f);
-    LV_LOG_USER("Manual VMC %s -> PWM %.0f%%", is_on ? "ON" : "OFF", g_pwm_percent);
+    LV_LOG_USER("Manual ventilation %s -> PWM %.0f%%", is_on ? "ON" : "OFF", g_pwm_percent);
     return;
   }
-  // LV_LOG_USER ("VMC %s", is_on ? "enabled" : "disabled");
+  // LV_LOG_USER ("Ventilation %s", is_on ? "enabled" : "disabled");
 }
 
 static void refresh_external_html_tools() {
-  String current_temp_text = isnan(g_current_temp_c) ? "--.-" : String(g_current_temp_c, 1);
-  String setpoint_temp_text = String(g_setpoint_temp_c, 1);
-  String vmc_state_text = (g_pwm_percent > 0.1f) ? "ON" : "OFF";
-  String pwm_text = String(g_pwm_percent, 0);
-
-  frame.externalHtmlTools = "<div class='action-item'><div>- "
-                            "Temperatures</div><div class='button-group'>"
-                            "<span class='button'>Current: " +
-                            current_temp_text +
-                            " C</span>"
-                            "<span class='button'>Setpoint: " +
-                            setpoint_temp_text +
-                            " C</span>"
-                            "</div></div>"
-                            "<div class='action-item'><div>- V.M.C. "
-                            "Status</div><div class='button-group'>"
-                            "<span class='button'>State: " +
-                            vmc_state_text +
-                            "</span>"
-                            "<span class='button'>Speed: " +
-                            pwm_text +
-                            "%</span>"
-                            "</div></div>"
-                            "<div class='action-item'><div>- Specific home "
-                            "page is visible at :</div>"
-                            "<div class='button-group'><a class='button' "
-                            "href='/index'>Index</a></div></div>";
-}
-
-void lv_create_main_gui(void) {
-  lv_create_main_gui();
-  update_access_network_labels(formatIpAddress(WiFi.localIP()), WiFi.macAddress());
+  frame.externalHtmlTools = "<div class='action-item'><div>- PID page:</div>"
+                            "<div class='button-group'><a class='button' href='/pid.html'>PID Web</a></div></div>";
 }
 
 // ============== FrameWeb Framework Callbacks ==============
@@ -288,13 +443,36 @@ void lv_create_main_gui(void) {
 void saveConfigCallback() {}
 
 /** @brief Called when WebSocket events occur (not used in this app) */
-void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length) {}
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length) {
+  switch (type) {
+  case WStype_CONNECTED:
+    // LV_LOG_USER("WS connected: client:%u", (unsigned)num);
+    g_websocket_client_num = (int)num;
+    webSocketSendState(num, true);
+    break;
+  case WStype_DISCONNECTED:
+   // LV_LOG_USER("WS disconnected: client:%u", (unsigned)num);
+    if (g_websocket_client_num == (int)num) {
+      g_websocket_client_num = -1;
+    }
+    break;
+  case WStype_TEXT:
+    //LV_LOG_USER("WS text event: client:%u", (unsigned)num);
+    g_websocket_client_num = (int)num;
+    decodePidJsonAndApply(num, payload, length);
+    break;
+  default:
+    LV_LOG_USER("WS event type:%d client:%u", (int)type, (unsigned)num);
+    break;
+  }
+}
 
 /** @brief Called when WiFi enters AP mode for configuration (not used in this
  * app) */
 void configModeCallback(WiFiManager *myWiFiManager) {}
 
 void IRAM_ATTR startingTask(void *pvParameter) {
+
   // Run network/framework boot asynchronously to keep GUI startup responsive.
   delay(2000); // Let the system stabilize before starting WiFi connection
 
@@ -310,12 +488,10 @@ void IRAM_ATTR startingTask(void *pvParameter) {
   // Read current time from system
   getLocalTime(&timeinfo);
 
+  refresh_external_html_tools();
+
   vTaskDelete(NULL); // auto destroy
-  wifiCxHandle = NULL;
-  LV_LOG_USER("deleted");
 }
-
-
 
 void setup() {
   String LVGL_Arduino = String("LVGL Library Version: ") + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
@@ -361,8 +537,12 @@ void setup() {
   ledcAttachPin(BACKLIGHT_PIN, BACKLIGHT_PWM_CHANNEL);
   set_backlight_percent(BACKLIGHT_BRIGHT_PERCENT_ACTIVE);
 
-  pinMode(VMC_ACTIVE_OUT_PIN, OUTPUT);
-  digitalWrite(VMC_ACTIVE_OUT_PIN, LOW);
+  // Fan PWM control on GPIO22.
+  ledcSetup(PWM_CHANNEL, PWM_FREQUENCY_HZ, PWM_RESOLUTION_BITS);
+  ledcAttachPin(VMC_PWM_PIN, PWM_CHANNEL);
+
+  //pinMode(VMC_ACTIVE_OUT_PIN, OUTPUT);
+  //digitalWrite(VMC_ACTIVE_OUT_PIN, LOW);
   set_pwm_percent(0.0f);
 
   // Function to draw the GUI (text, buttons and sliders)
@@ -375,10 +555,8 @@ void setup() {
 }
 
 void loop() {
-  // Keep FrameWeb services running once the startup task has completed.
-  // Update FrameWeb framework (web server, WebSocket, etc.)
-  // if (wifiCxHandle == NULL)
-  frame.loop();
+  // Keep FrameWeb services running.
+  frame.loop();    
 
   // LVGL timing loop: process events then advance internal tick base.
   lv_task_handler(); // let the GUI do its work
@@ -391,10 +569,17 @@ void loop() {
 
     // update DHT22 readings every 3 seconds to avoid excessive sensor polling, which can cause instability.
     if (refresh_sensor_counter++ > 2) {
-      update_dht_values();
-      refresh_external_html_tools();
-      refresh_sensor_counter = 0;
+      if (g_dht.getStatus() == DHTesp::ERROR_NONE) {
+        update_dht_values();
+        refresh_sensor_counter = 0;
+      } else {
+         g_dht.setup(DHT22_PIN, DHTesp::AUTO_DETECT); // Try to reset sensor on error, in case of transient failure. Note: auto-detect is not very reliable on ESP32, but this is just a best effort.
+         refresh_sensor_counter = -10;
+      }
+      // update WebSocket clients with current state every second if connected, to keep them in sync and update the graph if they are on the PID page.
+      webSocketSendState((uint8_t)g_websocket_client_num, true);
     }
+
 
     // Update time display every second
     if (getLocalTime(&timeinfo)) {
@@ -432,7 +617,6 @@ void loop() {
         g_backlight_dimmed = false;
       }
     }
-
 
   }
 }

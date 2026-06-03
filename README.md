@@ -1,10 +1,23 @@
 # Esp32_CYD_Pid
 
+## Changelog
+
+- 2026-06-03
+  - Configured fan output as LEDC hardware PWM on GPIO22.
+  - Confirmed set_pwm_percent(percent) applies percent directly to fan PWM duty-cycle.
+  - Clarified code comments and hardware mapping documentation.
+
+## Version Notes (2026-06)
+
+- Fan drive is now configured as hardware PWM on GPIO22 (LEDC).
+- set_pwm_percent(percent) directly applies the requested percent value to the fan PWM duty-cycle.
+- Backlight dimming remains on GPIO21.
+
 ESP32 CYD project with:
 - LVGL touch GUI
 - DHT22 temperature/humidity reading
 - PID control loop
-- PWM output for VMC/fan driving
+- PWM output for ventilation/fan driving
 - Backlight dimming on screen saver (GPIO21)
 - Esp32_Framework integration (WiFi manager, web tools, websocket stack, embedded HTML pipeline)
 
@@ -39,12 +52,12 @@ In short, Esp32_CYD_Pid provides the control logic (sensor + PID + UI), while Es
   - network info (IP/MAC/time)
 - Touch slider for setpoint (25.0 C to 45.0 C)
 - On-screen tuning controls for Kp / Ki / Kd
-- Manual VMC switch behavior when PID is disabled
+- Manual ventilation switch behavior when PID is disabled
 - Screen saver page with automatic backlight dimming (20%) and restore on touch (100%)
 - Screen saver is blocked during startup while MAC label is still visible (initialization guard)
 - Dynamic externalHtmlTools content showing:
   - temperatures
-  - V.M.C state
+  - Ventilation state
   - PWM speed in %
 
 ## Project Structure
@@ -67,9 +80,8 @@ In short, Esp32_CYD_Pid provides the control logic (sensor + PID + UI), while Es
   - CLK: GPIO25
   - CS: GPIO33
 - DHT22 data pin: GPIO27
-- PWM output pin: GPIO22
+- Fan PWM output pin: GPIO22 (LEDC)
 - TFT backlight pin: GPIO21 (LEDC PWM)
-- VMC active output pin: GPIO26
 - Optional RGB LED pins (board dependent): GPIO4 / GPIO16 / GPIO17
 
 ## Build and Upload
@@ -115,7 +127,7 @@ Current environment is configured in platformio.ini:
 - framework: arduino
 - partition table: min_spiffs.csv
 - monitor speed: 115200
-- extra script: Esp32_Framework extra_script.py
+- extra script: prebuild.py
 - custom_in_html: framework HTML source used by script pipeline
 - custom_out_h: generated C++ output consumed at build/runtime
 
@@ -127,7 +139,7 @@ Dependencies include LVGL, TFT_eSPI, DHTesp, XPT2046_Touchscreen, WiFiManager, W
 2. GUI is created with 4 panels:
    - Temperature
    - PID
-   - VMC
+  - Ventilation
    - Access/Network
 3. DHT22 is sampled periodically (guarded timing).
 4. PID computes output percentage from setpoint vs measured temperature.
@@ -153,7 +165,7 @@ They are currently minimal and can be extended for project-specific web behavior
 - PID ON:
   - output is continuously computed from control error
 - PID OFF:
-  - manual VMC switch forces output to 0% or 100%
+  - manual ventilation switch forces output to 0% or 100%
 
 ## Troubleshooting
 
@@ -177,7 +189,8 @@ They are currently minimal and can be extended for project-specific web behavior
 - No DHT values:
   - verify DHT22 wiring and GPIO27
 - PWM not driving actuator:
-  - verify GPIO22 and active line GPIO26 behavior on your board
+  - verify GPIO22 wiring and fan/input electrical compatibility on your board
+  - verify LEDC fan channel is initialized before runtime control
 
 ## Developer Notes
 
