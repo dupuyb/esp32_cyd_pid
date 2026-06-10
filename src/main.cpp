@@ -54,15 +54,14 @@ XPT2046_Touchscreen touchscreen(XPT2046_CS, XPT2046_IRQ);
 #define BACKLIGHT_PWM_CHANNEL 1
 #define BACKLIGHT_BRIGHT_PERCENT_ACTIVE 100.0f
 #define BACKLIGHT_BRIGHT_PERCENT_SCREENSAVER 20.0f
-#define WEB_HISTORY_POINTS 180
 
 // RGB LED on these GPIOs.
 #define RGB_LED_ACTIVE_HIGH 0
 
 // Temperature and humidity control variables
 static DHTesp g_dht;
-static float g_temp_history[WEB_HISTORY_POINTS];
-static float g_pwm_history[WEB_HISTORY_POINTS];
+static float g_temp_history[GRAPH_HISTORY_POINTS];
+static float g_pwm_history[GRAPH_HISTORY_POINTS];
 static size_t g_history_head = 0;
 static size_t g_history_count = 0;
 static int g_websocket_client_num = -1;
@@ -169,8 +168,8 @@ static void append_history_sample(float temperature_c, float pwm_percent) {
   }
   g_temp_history[g_history_head] = temperature_c;
   g_pwm_history[g_history_head] = pwm_percent;
-  g_history_head = (g_history_head + 1) % WEB_HISTORY_POINTS;
-  if (g_history_count < WEB_HISTORY_POINTS) {
+  g_history_head = (g_history_head + 1) % GRAPH_HISTORY_POINTS;
+  if (g_history_count < GRAPH_HISTORY_POINTS) {
     g_history_count++;
   }
 }
@@ -178,7 +177,7 @@ static void append_history_sample(float temperature_c, float pwm_percent) {
 static void webSocketSendState(uint8_t num, bool include_history) {
   JsonDocument readings;
   readings["type"] = "pid_state";
-  readings["historyPoints"] = WEB_HISTORY_POINTS;
+  readings["historyPoints"] = GRAPH_HISTORY_POINTS;
   readings["setpoint"] = g_setpoint_temp_c;
   readings["temperature"] = sensorData.temperature;
   readings["humidity"] = lv_label_get_text(g_label_humidity_value);
@@ -192,9 +191,9 @@ static void webSocketSendState(uint8_t num, bool include_history) {
   if (include_history) {
     JsonArray temp_history = readings["historyTemp"].to<JsonArray>();
     JsonArray pwm_history = readings["historyPwm"].to<JsonArray>();
-    size_t start = (g_history_head + WEB_HISTORY_POINTS - g_history_count) % WEB_HISTORY_POINTS;
+    size_t start = (g_history_head + GRAPH_HISTORY_POINTS - g_history_count) % GRAPH_HISTORY_POINTS;
     for (size_t i = 0; i < g_history_count; i++) {
-      size_t idx = (start + i) % WEB_HISTORY_POINTS;
+      size_t idx = (start + i) % GRAPH_HISTORY_POINTS;
       temp_history.add(g_temp_history[idx]);
       pwm_history.add(g_pwm_history[idx]);
     }
