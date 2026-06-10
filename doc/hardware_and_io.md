@@ -13,37 +13,37 @@
 
 ## Display and Touch
 
-| Function | Component | Pin / Interface | Notes |
-| --- | --- | --- | --- |
-| TFT display | TFT_eSPI | board-defined SPI/display wiring | LVGL display is rotated to landscape |
-| Touch IRQ | XPT2046 IRQ | GPIO36 | T_IRQ |
-| Touch MOSI | XPT2046 MOSI | GPIO32 | T_DIN |
-| Touch MISO | XPT2046 MISO | GPIO39 | T_OUT |
-| Touch CLK | XPT2046 CLK | GPIO25 | T_CLK |
-| Touch CS | XPT2046 CS | GPIO33 | T_CS |
+| Function      | Component     | Pin / Interface               | Notes                               |
+| ---           | ---           | ---                           | ---                                 |
+| TFT display   | TFT_eSPI      | board-defined SPI/display wiring | LVGL display is rotated to landscape |
+| Touch IRQ     | XPT2046 IRQ   | GPIO36                        | T_IRQ                               |
+| Touch MOSI    | XPT2046 MOSI  | GPIO32                        | T_DIN                               |
+| Touch MISO    | XPT2046 MISO  | GPIO39                        | T_OUT                               |
+| Touch CLK     | XPT2046 CLK   | GPIO25                        | T_CLK                               |
+| Touch CS      | XPT2046 CS    | GPIO33                        | T_CS                                |
 
 ## Control and Sensor I/O
 
-| Function | Pin | Mode | Notes |
-| --- | --- | --- | --- |
-| DHT22 data | GPIO27 | Digital input | Temperature and humidity sensor |
-| Fan PWM output | GPIO22 | LEDC PWM | Cooling/ventilation output |
-| Backlight PWM | GPIO21 | LEDC PWM | Screen brightness control |
-| RGB LED red | GPIO4 | Digital output | Active-low board LED wiring |
-| RGB LED green | GPIO16 | Digital output | Active-low board LED wiring |
-| RGB LED blue | GPIO17 | Digital output | Active-low board LED wiring |
+| Function       | Pin    | Mode            | Notes                           |
+| ---           | ---    | ---             | ---                             |
+| DHT22 data    | GPIO27 | Digital input   | Temperature and humidity sensor |
+| Fan PWM output | GPIO22 | LEDC PWM        | Cooling/ventilation output      |
+| Backlight PWM | GPIO21 | LEDC PWM        | Screen brightness control       |
+| RGB LED red   | GPIO4  | Digital output  | Active-low board LED wiring     |
+| RGB LED green | GPIO16 | Digital output  | Active-low board LED wiring     |
+| RGB LED blue  | GPIO17 | Digital output  | Active-low board LED wiring     |
 
 ## PWM Configuration
 
-| Item | Value |
-| --- | --- |
-| Fan PWM channel | 0 |
-| Backlight PWM channel | 1 |
-| PWM frequency | 20 kHz |
-| PWM resolution | 8 bits |
-| Fan output range | 0% to 100% |
-| Backlight active brightness | 100% |
-| Backlight screensaver brightness | 20% |
+| Item                         | Value  |
+| ---                         | ---    |
+| Fan PWM channel             | 0      |
+| Backlight PWM channel       | 1      |
+| PWM frequency               | 20 kHz |
+| PWM resolution              | 8 bits |
+| Fan output range            | 0% to 100% |
+| Backlight active brightness | 100%   |
+| Backlight screensaver brightness | 20%    |
 
 ## Firmware Behavior
 
