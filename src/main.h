@@ -20,10 +20,10 @@ static void set_pwm_percent(float percent);
 static void decodePidJsonAndApply(uint8_t num, uint8_t *payload, size_t length);
 static void turn_off_rgb_led(void);
 void compute_pid_and_drive_output(void);
-static void update_dht_values();
-static void control_slider_event_callback(lv_event_t *e);
-static void pid_switch_event_callback(lv_event_t *e);
-static void vmc_switch_event_callback(lv_event_t *e);
+void update_dht_values();
+void control_slider_event_callback(lv_event_t *e);
+void pid_switch_event_callback(lv_event_t *e);
+void vmc_switch_event_callback(lv_event_t *e);
 static void refresh_external_html_tools();
 
 void lv_create_main_gui(void);

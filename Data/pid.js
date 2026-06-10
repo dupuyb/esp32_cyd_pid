@@ -21,6 +21,7 @@
   let ws = null;
   let historyTemp = [];
   let historyPwm = [];
+  let historyPoints = 0;
   let syncInputsFromServer = true;
   let hasLocalDraft = false;
 
@@ -39,6 +40,16 @@
       return '--' + (suffix ? ' ' + suffix : '');
     }
     return value.toFixed(decimals) + (suffix ? ' ' + suffix : '');
+  }
+
+  function normalizeHistory(series) {
+    const values = series.map(Number);
+    if (!historyPoints || values.length >= historyPoints) {
+      return values;
+    }
+
+    const padding = new Array(historyPoints - values.length).fill(Number.NaN);
+    return padding.concat(values);
   }
 
   function drawChart() {
@@ -68,14 +79,15 @@
     ctx.lineTo(width - padRight, height - padBottom);
     ctx.stroke();
 
-    if (historyTemp.length < 2 || historyPwm.length < 2) {
+    const points = Math.max(historyPoints || 0, historyTemp.length, historyPwm.length);
+
+    if (points < 2 || historyTemp.length < 2 || historyPwm.length < 2) {
       ctx.fillStyle = '#64748b';
       ctx.font = '14px Trebuchet MS, sans-serif';
       ctx.fillText('Waiting for history data...', padLeft + 10, height / 2);
       return;
     }
 
-    const points = Math.min(historyTemp.length, historyPwm.length);
     let minT = Number.POSITIVE_INFINITY;
     let maxT = Number.NEGATIVE_INFINITY;
     for (let i = 0; i < points; i++) {
@@ -120,11 +132,18 @@
     ctx.strokeStyle = '#ef4444';
     ctx.lineWidth = 2;
     ctx.beginPath();
+    let tempLineStarted = false;
     for (let i = 0; i < points; i++) {
       const x = xOf(i);
-      const y = yTemp(historyTemp[i]);
-      if (i === 0) {
+      const value = historyTemp[i];
+      if (!Number.isFinite(value)) {
+        tempLineStarted = false;
+        continue;
+      }
+      const y = yTemp(value);
+      if (!tempLineStarted) {
         ctx.moveTo(x, y);
+        tempLineStarted = true;
       } else {
         ctx.lineTo(x, y);
       }
@@ -134,11 +153,18 @@
     ctx.strokeStyle = '#22c55e';
     ctx.lineWidth = 2;
     ctx.beginPath();
+    let pwmLineStarted = false;
     for (let i = 0; i < points; i++) {
       const x = xOf(i);
-      const y = yPwm(historyPwm[i]);
-      if (i === 0) {
+      const value = historyPwm[i];
+      if (!Number.isFinite(value)) {
+        pwmLineStarted = false;
+        continue;
+      }
+      const y = yPwm(value);
+      if (!pwmLineStarted) {
         ctx.moveTo(x, y);
+        pwmLineStarted = true;
       } else {
         ctx.lineTo(x, y);
       }
@@ -165,6 +191,10 @@
       pwmEl.textContent = fmt(data.pwm, 0, '%');
     }
 
+    if (Number.isFinite(data.historyPoints)) {
+      historyPoints = Math.max(0, Math.floor(data.historyPoints));
+    }
+
     if (typeof data.pidEnabled === 'boolean') {
       if (shouldSyncInputs) {
         pidEnabledInput.checked = data.pidEnabled;
@@ -186,8 +216,8 @@
     }
 
     if (Array.isArray(data.historyTemp) && Array.isArray(data.historyPwm)) {
-      historyTemp = data.historyTemp.map(Number).filter(Number.isFinite);
-      historyPwm = data.historyPwm.map(Number).filter(Number.isFinite);
+      historyTemp = normalizeHistory(data.historyTemp);
+      historyPwm = normalizeHistory(data.historyPwm);
       drawChart();
     }
 

@@ -9,11 +9,14 @@ It combines PID regulation, DHT22 sensing, PWM fan output, and display backlight
   - Configured fan output as LEDC hardware PWM on GPIO22.
   - Confirmed set_pwm_percent(percent) applies percent directly to fan PWM duty-cycle.
   - Clarified code comments and hardware mapping documentation.
+- 2026-06-06
+  - Added SPIFFS-backed persistence for Kp/Ki/Kd PID gains.
+  - PID gains are restored at startup from /pid.json when available.
 
 ## Version Notes (2026-06)
 
-- Fan drive is now configured as hardware PWM on GPIO22 (LEDC).
-- set_pwm_percent(percent) directly applies the requested percent value to the fan PWM duty-cycle.
+- Fan drive is configured as hardware PWM on GPIO22 (LEDC).
+- set_pwm_percent(percent) directly applies the requested percent value to the fan PWM duty cycle.
 - Backlight dimming remains on GPIO21.
 
 ESP32 CYD project with:
@@ -55,12 +58,13 @@ In short, Esp32_CYD_Pid provides the control logic (sensor + PID + UI), while Es
   - network info (IP/MAC/time)
 - Touch slider for setpoint (25.0 C to 45.0 C)
 - On-screen tuning controls for Kp / Ki / Kd
+- PID gains auto-save to SPIFFS and restore on boot
 - Manual ventilation switch behavior when PID is disabled
 - Screen saver page with automatic backlight dimming (20%) and restore on touch (100%)
-- Screen saver is blocked during startup while MAC label is still visible (initialization guard)
+- Screen saver is blocked during startup while the MAC label is still visible (initialization guard)
 - Dynamic externalHtmlTools content showing:
   - temperatures
-  - Ventilation state
+  - ventilation state
   - PWM speed in %
 
 ## Project Structure
@@ -138,20 +142,21 @@ Dependencies include LVGL, TFT_eSPI, DHTesp, XPT2046_Touchscreen, WiFiManager, W
 
 ## Runtime Behavior
 
-1. Boot initializes LVGL, touchscreen, DHT22, PWM and Esp32_Framework.
+1. Boot initializes LVGL, touchscreen, DHT22, PWM, and Esp32_Framework.
 2. GUI is created with 4 panels:
    - Temperature
    - PID
   - Ventilation
    - Access/Network
-3. DHT22 is sampled periodically (guarded timing).
-4. PID computes output percentage from setpoint vs measured temperature.
+3. DHT22 is sampled periodically with guarded timing.
+4. PID computes the output percentage from the setpoint vs measured temperature.
 5. PWM duty is updated and mirrored in the UI.
-6. externalHtmlTools content is refreshed with live process values.
-7. Time and network labels are refreshed in loop.
-8. While the MAC label is visible (startup/incomplete init), screen saver activation is intentionally blocked.
-9. After initialization is complete, screen saver is activated after inactivity timeout and dims backlight to 20%.
-10. Any touch restores dashboard page and backlight to 100%.
+6. PID gains are loaded from SPIFFS at startup and saved back whenever Kp/Ki/Kd are changed.
+7. externalHtmlTools content is refreshed with live process values.
+8. Time and network labels are refreshed in the main loop.
+9. While the MAC label is visible during startup, screen saver activation is blocked.
+10. After initialization is complete, the screen saver activates after the inactivity timeout and dims the backlight to 20%.
+11. Any touch restores the dashboard page and backlight to 100%.
 
 ## Framework Callbacks
 
@@ -165,6 +170,7 @@ They are currently minimal and can be extended for project-specific web behavior
 ## PID Controls
 
 - Kp, Ki, Kd are editable from GUI buttons.
+- Kp, Ki, Kd are persisted in /pid.json on SPIFFS.
 - PID ON:
   - output is continuously computed from control error
 - PID OFF:
