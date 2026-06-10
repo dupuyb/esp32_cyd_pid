@@ -60,10 +60,6 @@ XPT2046_Touchscreen touchscreen(XPT2046_CS, XPT2046_IRQ);
 
 // Temperature and humidity control variables
 static DHTesp g_dht;
-static float g_temp_history[GRAPH_HISTORY_POINTS];
-static float g_pwm_history[GRAPH_HISTORY_POINTS];
-static size_t g_history_head = 0;
-static size_t g_history_count = 0;
 static int g_websocket_client_num = -1;
 bool sensorOk = false;
 int sensorError = 0;
@@ -162,22 +158,10 @@ static String formatIpAddress(const IPAddress &ip) {
   return ip.toString();
 }
 
-static void append_history_sample(float temperature_c, float pwm_percent) {
-  if (!isfinite(temperature_c) || !isfinite(pwm_percent)) {
-    return;
-  }
-  g_temp_history[g_history_head] = temperature_c;
-  g_pwm_history[g_history_head] = pwm_percent;
-  g_history_head = (g_history_head + 1) % GRAPH_HISTORY_POINTS;
-  if (g_history_count < GRAPH_HISTORY_POINTS) {
-    g_history_count++;
-  }
-}
-
-static void webSocketSendState(uint8_t num, bool include_history) {
+static void webSocketSendState(uint8_t num) {
   JsonDocument readings;
   readings["type"] = "pid_state";
-  readings["historyPoints"] = GRAPH_HISTORY_POINTS;
+  readings["historyPoints"] = WEB_GRAPH_HISTORY_POINTS;
   readings["setpoint"] = g_setpoint_temp_c;
   readings["temperature"] = sensorData.temperature;
   readings["humidity"] = lv_label_get_text(g_label_humidity_value);
@@ -187,17 +171,6 @@ static void webSocketSendState(uint8_t num, bool include_history) {
   readings["kp"] = g_kp;
   readings["ki"] = g_ki;
   readings["kd"] = g_kd;
-
-  if (include_history) {
-    JsonArray temp_history = readings["historyTemp"].to<JsonArray>();
-    JsonArray pwm_history = readings["historyPwm"].to<JsonArray>();
-    size_t start = (g_history_head + GRAPH_HISTORY_POINTS - g_history_count) % GRAPH_HISTORY_POINTS;
-    for (size_t i = 0; i < g_history_count; i++) {
-      size_t idx = (start + i) % GRAPH_HISTORY_POINTS;
-      temp_history.add(g_temp_history[idx]);
-      pwm_history.add(g_pwm_history[idx]);
-    }
-  }
 
   String json_string;
   serializeJson(readings, json_string);
@@ -285,12 +258,6 @@ static void decodePidJsonAndApply(uint8_t num, uint8_t *payload, size_t length) 
   }
 
   bool need_recompute = false;
-  bool include_history = false;
-
-  if (root["request"].is<const char *>()) {
-    const char *request = root["request"];
-    include_history = (strcmp(request, "history") == 0 || strcmp(request, "full") == 0);
-  }
 
   if (root["setpoint"].is<float>() || root["setpoint"].is<int>()) {
     float value = root["setpoint"].as<float>();
@@ -374,7 +341,7 @@ static void decodePidJsonAndApply(uint8_t num, uint8_t *payload, size_t length) 
     compute_pid_and_drive_output();
   }
 
-  webSocketSendState(num, include_history);
+  webSocketSendState(num);
 }
 
 static void turn_off_rgb_led(void) {
@@ -485,7 +452,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
   case WStype_CONNECTED:
     // LV_LOG_USER("WS connected: client:%u", (unsigned)num);
     g_websocket_client_num = (int)num;
-    webSocketSendState(num, true);
+    webSocketSendState(num);
     break;
   case WStype_DISCONNECTED:
    // LV_LOG_USER("WS disconnected: client:%u", (unsigned)num);
@@ -636,11 +603,10 @@ void loop() {
         }
       } else {
         compute_pid_and_drive_output();
-        append_history_sample(sensorData.temperature, g_pwm_percent);
       }
 
       // Update WebSocket clients with current state when fresh sensor data is available.
-      webSocketSendState((uint8_t)g_websocket_client_num, true);
+      webSocketSendState((uint8_t)g_websocket_client_num);
 
       if (must_be_saved) {
         save_pid_settings();

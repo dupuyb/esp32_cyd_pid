@@ -5,6 +5,7 @@
   const humidityEl = document.getElementById('humidity');
   const pwmEl = document.getElementById('pwm');
   const pidStateEl = document.getElementById('pidState');
+  const wsPointCountEl = document.getElementById('wsPointCount');
 
   const setpointInput = document.getElementById('setpoint');
   const kpInput = document.getElementById('kp');
@@ -22,8 +23,15 @@
   let historyTemp = [];
   let historyPwm = [];
   let historyPoints = 0;
+  let wsPointCount = 0;
   let syncInputsFromServer = true;
   let hasLocalDraft = false;
+
+  function updatePointCounter() {
+    if (wsPointCountEl) {
+      wsPointCountEl.textContent = String(wsPointCount);
+    }
+  }
 
   const formInputs = [setpointInput, kpInput, kiInput, kdInput, pidEnabledInput, vmcManualOnInput];
   formInputs.forEach(function (input) {
@@ -42,14 +50,16 @@
     return value.toFixed(decimals) + (suffix ? ' ' + suffix : '');
   }
 
-  function normalizeHistory(series) {
-    const values = series.map(Number);
-    if (!historyPoints || values.length >= historyPoints) {
-      return values;
+  function appendHistoryPoint(temp, pwm) {
+    const maxLen = historyPoints || 60;
+    if (Number.isFinite(temp)) {
+      historyTemp.push(temp);
+      if (historyTemp.length > maxLen) historyTemp.splice(0, historyTemp.length - maxLen);
     }
-
-    const padding = new Array(historyPoints - values.length).fill(Number.NaN);
-    return padding.concat(values);
+    if (Number.isFinite(pwm)) {
+      historyPwm.push(pwm);
+      if (historyPwm.length > maxLen) historyPwm.splice(0, historyPwm.length - maxLen);
+    }
   }
 
   function drawChart() {
@@ -81,6 +91,18 @@
 
     const points = Math.max(historyPoints || 0, historyTemp.length, historyPwm.length);
 
+    function seriesValueAt(series, i) {
+      if (points <= 0) {
+        return Number.NaN;
+      }
+      // Right-align samples so newest value stays on the right edge.
+      const start = points - series.length;
+      if (i < start) {
+        return Number.NaN;
+      }
+      return series[i - start];
+    }
+
     if (points < 2 || historyTemp.length < 2 || historyPwm.length < 2) {
       ctx.fillStyle = '#64748b';
       ctx.font = '14px Trebuchet MS, sans-serif';
@@ -91,7 +113,7 @@
     let minT = Number.POSITIVE_INFINITY;
     let maxT = Number.NEGATIVE_INFINITY;
     for (let i = 0; i < points; i++) {
-      const t = historyTemp[i];
+      const t = seriesValueAt(historyTemp, i);
       if (Number.isFinite(t)) {
         if (t < minT) minT = t;
         if (t > maxT) maxT = t;
@@ -135,7 +157,7 @@
     let tempLineStarted = false;
     for (let i = 0; i < points; i++) {
       const x = xOf(i);
-      const value = historyTemp[i];
+      const value = seriesValueAt(historyTemp, i);
       if (!Number.isFinite(value)) {
         tempLineStarted = false;
         continue;
@@ -156,7 +178,7 @@
     let pwmLineStarted = false;
     for (let i = 0; i < points; i++) {
       const x = xOf(i);
-      const value = historyPwm[i];
+      const value = seriesValueAt(historyPwm, i);
       if (!Number.isFinite(value)) {
         pwmLineStarted = false;
         continue;
@@ -215,9 +237,8 @@
       if (Number.isFinite(data.kd)) kdInput.value = data.kd.toFixed(3);
     }
 
-    if (Array.isArray(data.historyTemp) && Array.isArray(data.historyPwm)) {
-      historyTemp = normalizeHistory(data.historyTemp);
-      historyPwm = normalizeHistory(data.historyPwm);
+    if (Number.isFinite(data.temperature) || Number.isFinite(data.pwm)) {
+      appendHistoryPoint(data.temperature, data.pwm);
       drawChart();
     }
 
@@ -238,6 +259,8 @@
 
     ws.onopen = function () {
       wsStatus.textContent = 'WebSocket: connected';
+      wsPointCount = 0;
+      updatePointCounter();
       syncInputsFromServer = true;
       sendJson({ request: 'full' });
     };
@@ -262,6 +285,8 @@
         return;
       }
       if (data.type === 'pid_state') {
+        wsPointCount += 1;
+        updatePointCounter();
         updateState(data);
         return;
       }

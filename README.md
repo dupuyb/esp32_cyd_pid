@@ -5,6 +5,11 @@ It combines PID regulation, DHT22 sensing, PWM fan output, and display backlight
 
 ## Changelog
 
+- 2026-06-10
+  - Reduced WebSocket payload size by sending only the current temperature and PWM values.
+  - Moved history reconstruction to the browser side in `Data/pid.js`.
+  - Added a live WebSocket point counter in the PID controller dashboard.
+  - Adjusted the chart to scroll right-to-left with the newest samples anchored on the right.
 - 2026-06-03
   - Configured fan output as LEDC hardware PWM on GPIO22.
   - Confirmed set_pwm_percent(percent) applies percent directly to fan PWM duty-cycle.
@@ -56,6 +61,7 @@ In short, Esp32_CYD_Pid provides the control logic (sensor + PID + UI), while Es
   - PWM output (%)
   - PID state (ON/OFF)
   - network info (IP/MAC/time)
+- Live WebSocket counter in the PID dashboard to confirm the connection is still receiving frames
 - Touch slider for setpoint (25.0 C to 45.0 C)
 - On-screen tuning controls for Kp / Ki / Kd
 - PID gains auto-save to SPIFFS and restore on boot
@@ -66,6 +72,13 @@ In short, Esp32_CYD_Pid provides the control logic (sensor + PID + UI), while Es
   - temperatures
   - ventilation state
   - PWM speed in %
+
+## Dashboard Behavior
+
+- The PID Web dashboard now receives single values for temperature and PWM, not a full history array.
+- The browser rebuilds the history locally as frames arrive.
+- The chart scrolls from right to left so the newest point stays on the right edge.
+- The received-points counter helps verify that the WebSocket link is alive even if the values change slowly.
 
 ## Project Structure
 
@@ -157,6 +170,7 @@ Dependencies include LVGL, TFT_eSPI, DHTesp, XPT2046_Touchscreen, WiFiManager, W
 9. While the MAC label is visible during startup, screen saver activation is blocked.
 10. After initialization is complete, the screen saver activates after the inactivity timeout and dims the backlight to 20%.
 11. Any touch restores the dashboard page and backlight to 100%.
+12. The PID dashboard receives live WebSocket frames, increments the received-points counter, and rebuilds the local chart history in the browser.
 
 ## Framework Callbacks
 

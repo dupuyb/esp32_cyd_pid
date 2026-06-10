@@ -650,14 +650,16 @@ void lv_create_gui() {
   lv_obj_set_style_bg_opa(chart, LV_OPA_COVER, 0);
   lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
   lv_chart_set_update_mode(chart, LV_CHART_UPDATE_MODE_SHIFT);
-  lv_chart_set_point_count(chart, GRAPH_HISTORY_POINTS);
+  lv_chart_set_point_count(chart, DSP_GRAPH_HISTORY_POINTS);
   lv_chart_set_div_line_count(chart, 4, 8);
-  lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_X, 0, GRAPH_HISTORY_POINTS - 1);
+  lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_X, 0, DSP_GRAPH_HISTORY_POINTS - 1);
   lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, 500);
   lv_chart_set_range(chart, LV_CHART_AXIS_SECONDARY_Y, 0, 100);
   ser1 = lv_chart_add_series(chart, lv_color_hex(0xF87171), LV_CHART_AXIS_PRIMARY_Y);
   ser2 = lv_chart_add_series(chart, lv_color_hex(0x4ADE80), LV_CHART_AXIS_SECONDARY_Y);
-  lv_obj_set_style_line_width(chart, 3, LV_PART_ITEMS);
+  lv_obj_set_style_line_width(chart, 2, LV_PART_ITEMS);
+  lv_obj_set_style_width(chart, 3, LV_PART_INDICATOR);
+  lv_obj_set_style_height(chart, 3, LV_PART_INDICATOR);
   lv_chart_refresh(chart);
 
   lv_obj_t *graph_nav = lv_obj_create(panel_graph);

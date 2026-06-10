@@ -9,7 +9,8 @@
 #define PAGE_SAVER 2
 #define UI_PAGE_COUNT 3
 
-#define GRAPH_HISTORY_POINTS 180
+#define WEB_GRAPH_HISTORY_POINTS 300
+#define DSP_GRAPH_HISTORY_POINTS 100
 
 extern bool must_be_saved;
 extern uint32_t g_last_pid_compute_ms;
