@@ -161,10 +161,9 @@ static String formatIpAddress(const IPAddress &ip) {
 static void webSocketSendState(uint8_t num) {
   JsonDocument readings;
   readings["type"] = "pid_state";
-  readings["historyPoints"] = WEB_GRAPH_HISTORY_POINTS;
   readings["setpoint"] = g_setpoint_temp_c;
   readings["temperature"] = sensorData.temperature;
-  readings["humidity"] = lv_label_get_text(g_label_humidity_value);
+  readings["humidity"] = sensorData.humidity;
   readings["pwm"] = g_pwm_percent;
   readings["pidEnabled"] = g_pid_enabled;
   readings["vmcManualOn"] = g_vmc_manual_on;

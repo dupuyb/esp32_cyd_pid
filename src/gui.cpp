@@ -245,7 +245,9 @@ void update_graph_history() {
   int pwm_value = (int)(g_pwm_percent + 0.5f);
   lv_chart_set_next_value(chart, ser1, temp_value);
   lv_chart_set_next_value(chart, ser2, pwm_value);
+  if (pageVisible == PAGE_GRAPH) {
   lv_chart_refresh(chart);
+  }
 }
 
 void switch_callback(lv_obj_t *label, bool is_on) {
@@ -657,9 +659,9 @@ void lv_create_gui() {
   lv_chart_set_range(chart, LV_CHART_AXIS_SECONDARY_Y, 0, 100);
   ser1 = lv_chart_add_series(chart, lv_color_hex(0xF87171), LV_CHART_AXIS_PRIMARY_Y);
   ser2 = lv_chart_add_series(chart, lv_color_hex(0x4ADE80), LV_CHART_AXIS_SECONDARY_Y);
-  lv_obj_set_style_line_width(chart, 2, LV_PART_ITEMS);
-  lv_obj_set_style_width(chart, 3, LV_PART_INDICATOR);
-  lv_obj_set_style_height(chart, 3, LV_PART_INDICATOR);
+  //lv_obj_set_style_line_width(chart, 2, LV_PART_ITEMS);
+  //lv_obj_set_style_width(chart, 3, LV_PART_INDICATOR);
+  //lv_obj_set_style_height(chart, 3, LV_PART_INDICATOR);
   lv_chart_refresh(chart);
 
   lv_obj_t *graph_nav = lv_obj_create(panel_graph);

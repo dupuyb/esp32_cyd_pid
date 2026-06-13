@@ -22,7 +22,7 @@
   let ws = null;
   let historyTemp = [];
   let historyPwm = [];
-  let historyPoints = 0;
+  const historyPoints = 300;
   let wsPointCount = 0;
   let syncInputsFromServer = true;
   let hasLocalDraft = false;
@@ -211,10 +211,6 @@
     }
     if (Number.isFinite(data.pwm)) {
       pwmEl.textContent = fmt(data.pwm, 0, '%');
-    }
-
-    if (Number.isFinite(data.historyPoints)) {
-      historyPoints = Math.max(0, Math.floor(data.historyPoints));
     }
 
     if (typeof data.pidEnabled === 'boolean') {

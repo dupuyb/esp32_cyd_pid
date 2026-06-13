@@ -9,7 +9,6 @@
 #define PAGE_SAVER 2
 #define UI_PAGE_COUNT 3
 
-#define WEB_GRAPH_HISTORY_POINTS 300
 #define DSP_GRAPH_HISTORY_POINTS 100
 
 extern bool must_be_saved;
