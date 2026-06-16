@@ -5,6 +5,9 @@ It combines PID regulation, DHT22 sensing, PWM fan output, and display backlight
 
 ## Changelog
 
+- 2026-06-16
+  - Switched DHT handling to a local driver implementation in `src/dht.cpp` and `src/dht.h`.
+  - Removed dependency on external DHTesp package for runtime sensor acquisition.
 - 2026-06-10
   - Reduced WebSocket payload size by sending only the current temperature and PWM values.
   - Moved history reconstruction to the browser side in `Data/pid.js`.
@@ -83,6 +86,8 @@ In short, Esp32_CYD_Pid provides the control logic (sensor + PID + UI), while Es
 ## Project Structure
 
 - src/main.cpp: hardware init, LVGL loop, DHT sampling, PID compute, PWM drive, Esp32_Framework lifecycle
+- src/dht.cpp: local low-level DHT driver implementation (ESP-IDF style)
+- src/dht.h: local DHT driver API used by firmware
 - src/gui.h: UI widgets, callbacks, labels updates, PID tuning controls
 - include/User_Setup.h: TFT_eSPI display configuration
 - include/lv_conf.h: LVGL configuration
@@ -151,7 +156,8 @@ Current environment is configured in platformio.ini:
 - custom_in_html: framework HTML source used by script pipeline
 - custom_out_h: generated C++ output consumed at build/runtime
 
-Dependencies include LVGL, TFT_eSPI, DHTesp, XPT2046_Touchscreen, WiFiManager, WebSockets, ArduinoJson, and Esp32_Framework.
+Dependencies include LVGL, TFT_eSPI, XPT2046_Touchscreen, WiFiManager, WebSockets, ArduinoJson, and Esp32_Framework.
+DHT reading uses the local driver files in `src/dht.cpp` and `src/dht.h`.
 
 ## Runtime Behavior
 

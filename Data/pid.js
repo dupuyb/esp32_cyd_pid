@@ -6,6 +6,7 @@
   const pwmEl = document.getElementById('pwm');
   const pidStateEl = document.getElementById('pidState');
   const wsPointCountEl = document.getElementById('wsPointCount');
+  const rebootTimeEl = document.getElementById('rebootTime');
 
   const setpointInput = document.getElementById('setpoint');
   const kpInput = document.getElementById('kp');
@@ -236,6 +237,10 @@
     if (Number.isFinite(data.temperature) || Number.isFinite(data.pwm)) {
       appendHistoryPoint(data.temperature, data.pwm);
       drawChart();
+    }
+
+    if (typeof data.rebootTime === 'string' && rebootTimeEl) {
+      rebootTimeEl.textContent = data.rebootTime;
     }
 
     if (shouldSyncInputs) {

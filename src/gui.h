@@ -1,7 +1,8 @@
 #pragma once
 
 #include "Arduino.h"
-#include <DHTesp.h>
+//#include <DHTesp.h>
+#include "dht.h"
 #include <lvgl.h>
 
 #define PAGE_MAIN 0
@@ -11,6 +12,7 @@
 
 #define DSP_GRAPH_HISTORY_POINTS 100
 
+extern bool testGraph;
 extern bool must_be_saved;
 extern uint32_t g_last_pid_compute_ms;
 
@@ -45,6 +47,13 @@ extern bool g_pid_enabled;
 extern bool g_vmc_manual_on;
 
 extern String currentTime;
+extern String rebootTime;
+
+struct TempAndHumidity {
+  float temperature;
+  float humidity;
+};
+
 extern TempAndHumidity sensorData;
 extern int pageVisible;
 

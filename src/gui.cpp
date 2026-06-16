@@ -3,6 +3,7 @@
 #include <FS.h>
 #include <SPIFFS.h>
 
+bool testGraph = false;
 bool must_be_saved = false;
 static const char *PID_SETTINGS_FILE = "/pid.json";
 
@@ -46,6 +47,7 @@ bool g_vmc_manual_on = true;
 
 // Graphical data.
 String currentTime = "HH:MM:SS";
+String rebootTime = "--/--/-- --:--";
 TempAndHumidity sensorData;
 
 // Generic context passed to PID +/- button callbacks.
@@ -173,8 +175,6 @@ void update_access_network_labels(String ip, String mac) {
     return;
   }
   String ip_text = "IP: " + ip;
-  if (strcmp(ip_text.c_str(), lv_label_get_text(g_label_ip_line))==0)
-    return;
   lv_label_set_text(g_label_ip_line, ip_text.c_str());
 
   if (g_label_mac_line != NULL) {
@@ -183,9 +183,10 @@ void update_access_network_labels(String ip, String mac) {
     if (show_mac) {
       String mac_text = "Ma:" + mac;
       lv_label_set_text(g_label_mac_line, mac_text.c_str());
-      lv_obj_clear_flag(g_label_mac_line, LV_OBJ_FLAG_HIDDEN);
+      //lv_obj_clear_flag(g_label_mac_line, LV_OBJ_FLAG_HIDDEN);
     } else {
-      lv_obj_add_flag(g_label_mac_line, LV_OBJ_FLAG_HIDDEN);
+      lv_label_set_text(g_label_mac_line, rebootTime.c_str());
+      //lv_obj_add_flag(g_label_mac_line, LV_OBJ_FLAG_HIDDEN);
     }
   }
 }
@@ -213,24 +214,32 @@ void set_pwm_values() {
 }
 
 void update_dht_values() {
-  if (isnan(sensorData.temperature) || isnan(sensorData.humidity)) 
-    return;
 
-  // Update main temperature/humidity labels and mirror on screen saver page.
+  // Update main temperature/humidity labels.
   char temp_text[12];
-  lv_snprintf(temp_text, sizeof(temp_text), "%.1f", sensorData.temperature);
+  lv_color_t temp_color =  lv_color_hex(0x0F3D5E);
+  if (isnan(sensorData.temperature)) {
+    strcpy(temp_text, "Err.");
+  } else { 
+    lv_snprintf(temp_text, sizeof(temp_text), "%.1f", sensorData.temperature);
+    temp_color = color_from_temperature(sensorData.temperature);
+  }
   lv_label_set_text(g_label_reading_value, temp_text);
-  lv_obj_set_style_text_color(g_label_reading_value, color_from_temperature(sensorData.temperature), 0);
+  lv_obj_set_style_text_color(g_label_reading_value, temp_color, 0);
 
   char hum_text[12];
-  lv_snprintf(hum_text, sizeof(hum_text), "%.0f", sensorData.humidity);
+  if (isnan(sensorData.humidity)) {
+    strcpy(hum_text, "Err.");
+  } else {
+    lv_snprintf(hum_text, sizeof(hum_text), "%.0f", sensorData.humidity);
+  }
   lv_label_set_text(g_label_humidity_value, hum_text);
 
   if (g_label_ss_temp != NULL) {
     char temp_ss_text[16];
-    lv_snprintf(temp_ss_text, sizeof(temp_ss_text), "%s C", temp_text);
+    lv_snprintf(temp_ss_text, sizeof(temp_ss_text), "%s °C", temp_text);
     lv_label_set_text(g_label_ss_temp, temp_ss_text);
-    lv_obj_set_style_text_color(g_label_ss_temp, color_from_temperature(sensorData.temperature), 0);
+    lv_obj_set_style_text_color(g_label_ss_temp, temp_color, 0);
   }
 }
 
@@ -281,6 +290,13 @@ static lv_obj_t *g_tile_page_graph = NULL;
 int pageVisible = 0;
 
 //void gui_setPage(int page);
+
+static void pid_title_event_callback(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+    return;
+  }
+  testGraph = true;
+}
 
 static void temperature_title_event_callback(lv_event_t *e) {
   if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
@@ -498,6 +514,8 @@ void lv_create_gui() {
   lv_obj_set_width(title_pid, lv_pct(100));
   lv_obj_set_style_text_align(title_pid, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_pos(title_pid, 0, 0);
+    lv_obj_add_flag(title_pid, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(title_pid, pid_title_event_callback, LV_EVENT_CLICKED, NULL);
 
   // PID enable switch.
   g_switch_pid = lv_switch_create(panel_pid);

@@ -1,20 +1,23 @@
-#include "gui.h"
 #include "main.h"
-#include <TFT_eSPI.h>
-#include <lvgl.h>
+#include "Ticker.h"
+#include "gui.h"
 #include <ArduinoJson.h>
 #include <FS.h>
 #include <SPIFFS.h>
+#include <TFT_eSPI.h>
+#include <lvgl.h>
 #include <math.h>
 
 // ============== Framework and Core Includes ==============
 #include "FrameWeb.h"
 FrameWeb frame; // Web server and configuration framework instance
 
-#define WIFI_TASK_PRIORITY 5 // Low numbers denote low priority tasks
+#define TEMP_TASK_PRIORITY 3 // Higher priority tasks the DHT11 one wire protocole is very sensitve to timing and can fail if the task is delayed too much.
+#define WIFI_TASK_PRIORITY 2 // Lower priority to avoid blocking the GUI and temperature reading tasks.
+#define LVGL_TASK_PRIORITY 1 // Finally screen priority to keep GUI responsive
+
 TaskHandle_t wifiCxHandle = NULL;
-#define LVGL_TASK_PRIORITY 12 // Higher priority than WiFi task to keep GUI responsive
-SemaphoreHandle_t guiMutex;
+SemaphoreHandle_t guiMutex; // Triggered GUI refresh when new temperature/humidity data is available.
 
 // Install the "XPT2046_Touchscreen" library by Paul Stoffregen to use the
 // touchscreen - https://github.com/PaulStoffregen/XPT2046_Touchscreen.
@@ -34,8 +37,6 @@ XPT2046_Touchscreen touchscreen(XPT2046_CS, XPT2046_IRQ);
 #define SCREEN_WIDTH 240
 #define SCREEN_HEIGHT 320
 
-// DHT22 pin to sensor.
-#define DHT22_PIN 27
 // LED RGB pins
 #define RGB_LED_R_PIN 4
 #define RGB_LED_G_PIN 16
@@ -58,11 +59,19 @@ XPT2046_Touchscreen touchscreen(XPT2046_CS, XPT2046_IRQ);
 // RGB LED on these GPIOs.
 #define RGB_LED_ACTIVE_HIGH 0
 
-// Temperature and humidity control variables
-static DHTesp g_dht;
+// Sensor DHT22 (AM2302) on this GPIO.
+// This project uses the local ESP-IDF style DHT driver (src/dht.cpp, src/dht.h),
+// not the external DHTesp dependency.
+#define DHT_PIN GPIO_NUM_27
 static int g_websocket_client_num = -1;
-bool sensorOk = false;
-int sensorError = 0;
+bool newValueAvailable = false;
+bool notifyWebSocket = false;
+/** Task handle for the light value read task */
+TaskHandle_t dhtTaskHandle = NULL;
+/** Ticker for temperature reading */
+Ticker dhtTicker;
+int dhtAcquisitionCounter = 0;
+bool dhtCriticalAccess = false;
 
 // Touchscreen coordinates: (x, y) and pressure (z)
 int x, y, z;
@@ -98,15 +107,13 @@ static void set_backlight_percent(float percent);
 
 static void apply_screen_mode(bool screen_saver_active) {
   int pv = PAGE_MAIN; // Main page by default.
-  if (pageVisible!=PAGE_SAVER) 
-    pv=pageVisible; // Graph page if it was active before.
+  if (pageVisible != PAGE_SAVER)
+    pv = pageVisible; // Graph page if it was active before.
   const int target_page = screen_saver_active ? PAGE_SAVER : pv;
   if (pageVisible != target_page) {
     gui_setPage(target_page);
   }
-  const float target_brightness = screen_saver_active
-                                      ? BACKLIGHT_BRIGHT_PERCENT_SCREENSAVER
-                                      : BACKLIGHT_BRIGHT_PERCENT_ACTIVE;
+  const float target_brightness = screen_saver_active ? BACKLIGHT_BRIGHT_PERCENT_SCREENSAVER : BACKLIGHT_BRIGHT_PERCENT_ACTIVE;
   const bool should_be_dimmed = screen_saver_active;
   // Apply backlight changes only when mode really changes.
   if (g_backlight_dimmed != should_be_dimmed) {
@@ -122,9 +129,9 @@ static void keep_screen_awake(void) {
 
 static void set_backlight_percent(float percent) {
   // Clamp to a safe range before converting to LEDC duty-cycle.
-  if (percent < 0.0f) 
+  if (percent < 0.0f)
     percent = 0.0f;
-  if (percent > 100.0f) 
+  if (percent > 100.0f)
     percent = 100.0f;
   uint32_t duty = (uint32_t)((percent * (float)PWM_MAX_DUTY / 100.0f) + 0.5f);
   ledcWrite(BACKLIGHT_PWM_CHANNEL, duty);
@@ -161,10 +168,12 @@ static String formatIpAddress(const IPAddress &ip) {
 static void webSocketSendState(uint8_t num) {
   JsonDocument readings;
   readings["type"] = "pid_state";
-  readings["setpoint"] = g_setpoint_temp_c;
+
   readings["temperature"] = sensorData.temperature;
   readings["humidity"] = sensorData.humidity;
   readings["pwm"] = g_pwm_percent;
+  readings["rebootTime"] = rebootTime;
+  readings["setpoint"] = g_setpoint_temp_c;
   readings["pidEnabled"] = g_pid_enabled;
   readings["vmcManualOn"] = g_vmc_manual_on;
   readings["kp"] = g_kp;
@@ -200,14 +209,14 @@ static void set_pwm_percent(float percent) {
   ledcWrite(PWM_CHANNEL, pwm_fan);
 }
 
-void compute_pid_and_drive_output(void) {
+void compute_pid_and_drive_output() {
   // Fail-safe: if PID is disabled or sensor value is invalid, force output to 0%.
-  if ( isnan(sensorData.temperature)) {
+  if (isnan(sensorData.temperature)) {
     set_pwm_percent(0.0f);
     return;
   }
 
-  if (!g_pid_enabled ){
+  if (!g_pid_enabled) {
     set_pwm_percent(g_vmc_manual_on ? 100.0f : 0.0f);
     return;
   }
@@ -351,16 +360,19 @@ static void turn_off_rgb_led(void) {
 
 static void refresh_widget_lcd() {
 
-  if (sensorOk){
-    // Sensor
-    update_dht_values();
-    update_graph_history();
+  // Sensor
+  update_dht_values();
 
-    // Update percent.
-    set_pwm_values();
+  // Update graph and control loop only if sensor is valid.
+  if (newValueAvailable) {
 
     compute_pid_and_drive_output();
 
+    update_graph_history();
+    set_pwm_values();
+
+    newValueAvailable = false;
+    notifyWebSocket = true;
   }
 
   // update time every 1 second
@@ -369,32 +381,29 @@ static void refresh_widget_lcd() {
   // update IP & MAC Address.
   update_access_network_labels(formatIpAddress(WiFi.localIP()), WiFi.macAddress());
 
-  // Do not enable screen saver while MAC is visible: network/time init is still ongoing.
+  //  Screen save or not.
   bool mac_label_visible = (g_label_mac_line != NULL) && !lv_obj_has_flag(g_label_mac_line, LV_OBJ_FLAG_HIDDEN);
   if (mac_label_visible) {
-      keep_screen_awake();
+    keep_screen_awake();
   } else {
-      const uint32_t now = millis();
-      if (g_last_user_activity_ms == 0) {
-        g_last_user_activity_ms = now;
-      }
-      const bool screen_saver_active =
-          (uint32_t)(now - g_last_user_activity_ms) >= SCREEN_SAVER_TIMEOUT_MS;
-      // Screen saver: if no touch for a while, switch to clock/network page and dim.
-      apply_screen_mode(screen_saver_active);
+    const uint32_t now = millis();
+    if (g_last_user_activity_ms == 0) {
+      g_last_user_activity_ms = now;
+    }
+    const bool screen_saver_active = (uint32_t)(now - g_last_user_activity_ms) >= SCREEN_SAVER_TIMEOUT_MS;
+    // Screen saver: if no touch for a while, switch to clock/network page and dim.
+    apply_screen_mode(screen_saver_active);
   }
 }
 
 bool get_dht_values() {
-  if (g_dht.getStatus() != DHTesp::ERROR_NONE) {
-      LV_LOG_USER("DHT22 bad status.");
-    return false;
-  }
-  // Sample the DHT and update both UI values and control loop input.
-  sensorData = g_dht.getTempAndHumidity();
-  if (isnan(sensorData.temperature) || isnan(sensorData.humidity)) {
-    LV_LOG_USER("DHT22 read failed.");
-    return false;
+  // Local DHT driver returns ESP_OK on a fully valid frame.
+  // Keep previous values untouched when a read fails.
+  if ( dht_read_float_data(DHT_TYPE_AM2301, DHT_PIN, &sensorData.humidity, &sensorData.temperature) == ESP_OK) {
+    if (isnan(sensorData.temperature) || isnan(sensorData.humidity)) {
+      LV_LOG_USER("DHT22 read failed.");
+      return false;
+    }
   }
   // Serial.printf("Temperature: %.2f C, Humidity: %.2f%%\n", sensorData.temperature, sensorData.humidity);
   return true;
@@ -454,13 +463,13 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
     webSocketSendState(num);
     break;
   case WStype_DISCONNECTED:
-   // LV_LOG_USER("WS disconnected: client:%u", (unsigned)num);
+    // LV_LOG_USER("WS disconnected: client:%u", (unsigned)num);
     if (g_websocket_client_num == (int)num) {
       g_websocket_client_num = -1;
     }
     break;
   case WStype_TEXT:
-    //LV_LOG_USER("WS text event: client:%u", (unsigned)num);
+    // LV_LOG_USER("WS text event: client:%u", (unsigned)num);
     g_websocket_client_num = (int)num;
     decodePidJsonAndApply(num, payload, length);
     break;
@@ -474,8 +483,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
 void configModeCallback(WiFiManager *myWiFiManager) {}
 
 void IRAM_ATTR startingTask(void *pvParameter) {
-  // Run network/framework boot asynchronously to keep GUI startup responsive.
-  delay(2000); // Let the system stabilize before starting WiFi connection
   // Initialize FrameWeb framework (web server, WebSocket, config management)
   frame.setup();
   // Configure system time from NTP server
@@ -491,30 +498,89 @@ void IRAM_ATTR startingTask(void *pvParameter) {
   vTaskDelete(NULL); // auto destroy
 }
 
+// Function to read temperature and humidity from DHT22 sensor.
+// returns true if new values are available, false otherwise.
+bool dhtMeasurement() {
+
+  // Update measurement stamp shown in GUI and sent through WebSocket as rebootTime.
+  // Format: "Meas:<counter> dd/mm hh:mm".
+  if (getLocalTime(&timeinfo)) {
+    char strRestart[25];
+    strftime(strRestart, sizeof(strRestart), "%d/%m %H:%M", &timeinfo);
+    char strRst[10];
+    snprintf(strRst, sizeof(strRst), "Meas:%d ", dhtAcquisitionCounter++);
+    rebootTime = String(strRst) + String(strRestart);
+  }
+
+  // Exclude main Loop during DHT22 acquisition.
+  dhtCriticalAccess = true;
+  newValueAvailable =  get_dht_values();
+  dhtCriticalAccess = false;
+  return newValueAvailable;
+}
+
 // Task dedicated to LVGL processing. Runs the LVGL handler in a loop with a
 // delay to target roughly 50 FPS.
 void IRAM_ATTR lvglTask(void *pvParameter) {
-    vTaskDelay(pdMS_TO_TICKS(20));
-    while (1) {
-      if (xSemaphoreTake(guiMutex, portMAX_DELAY) == pdTRUE) {
-        lv_task_handler();
-        lv_tick_inc(20);    // tell LVGL how much time has passed
-        xSemaphoreGive(guiMutex);
-      }
-      // 20ms equivalent to 50 FPS.
-      vTaskDelay(pdMS_TO_TICKS(20));
+  vTaskDelay(pdMS_TO_TICKS(20));
+  while (1) {
+    if (xSemaphoreTake(guiMutex, portMAX_DELAY) == pdTRUE) {
+      lv_task_handler();
+      lv_tick_inc(20); // tell LVGL how much time has passed
+      xSemaphoreGive(guiMutex);
     }
+    // 20ms equivalent to 50 FPS.
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
+
+// Task to reads temperature from DHT11 sensor
+void IRAM_ATTR dhtTask(void *pvParameters) {
+  Serial.println("tempTask loop started");
+  bool isRunning = true;
+
+  while (isRunning) {
+    // Read temperature and humidity from DHT22 sensor
+    isRunning = dhtMeasurement();
+    // Got sleep again
+    vTaskSuspend(NULL);
+  }
+
+  // Task is ending, clean up and delete itself
+  dhtAcquisitionCounter++;
+  dhtTicker.detach();
+  dhtTaskHandle = NULL;
+  vTaskDelete(NULL); // auto destroy
+}
+
+/**
+ * triggerGetTemp. Sets flag dhtUpdated to true for handling in loop()
+ * called by Ticker getTempTimer
+ */
+void triggerGetTemp() {
+  if (dhtTaskHandle != NULL) {
+    xTaskResumeFromISR(dhtTaskHandle);
+  }
+}
+
+/* 
+* Task pinned to CPU 1 to read temperature and humidity from DHT22 sensor. 
+*/
+void startTempTask() {
+
+  // Start task to get temperature
+  xTaskCreatePinnedToCore(dhtTask, "dhtTask", 4000, NULL, TEMP_TASK_PRIORITY, &dhtTaskHandle, 1);
+
+  // Start update of environment data every 30 seconds
+  dhtTicker.attach(30, triggerGetTemp);
 }
 
 void setup() {
+
   String LVGL_Arduino = String("LVGL Library Version: ") + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
   Serial.begin(115200);
 
-  delay(200);
   Serial.println(LVGL_Arduino);
-
-  // Initialize DHT sensor on pin GPIO27
-  g_dht.setup(DHT22_PIN, DHTesp::DHT22);
 
   // Try to keep onboard RGB LED off at startup.
   turn_off_rgb_led();
@@ -572,14 +638,20 @@ void setup() {
 
   // Start the WiFi connection and web server in a separate task to avoid blocking
   LV_LOG_USER("Thread connectTask starting...");
-  xTaskCreate(&startingTask, "startingTask", 4096, NULL, WIFI_TASK_PRIORITY, &wifiCxHandle);
+  xTaskCreate(&startingTask, "startingTask", 4000, NULL, WIFI_TASK_PRIORITY, &wifiCxHandle);
 
   // Start the LVGL task loop in a separate task to keep the GUI responsive.
   LV_LOG_USER("Thread LVGL loop starting...");
-  xTaskCreate(&lvglTask, "LVGL", 4096*2, NULL, LVGL_TASK_PRIORITY, NULL);
+  xTaskCreate(&lvglTask, "LVGL", 4096 * 2, NULL, LVGL_TASK_PRIORITY, NULL);
 }
 
 void loop() {
+
+  if (dhtCriticalAccess) {
+    // If temperature reading is in progress, skip the rest of the loop to avoid blocking.
+    vTaskDelay(pdMS_TO_TICKS(20));
+    return;
+  }
 
   // Keep FrameWeb services running.
   frame.loop();
@@ -588,24 +660,15 @@ void loop() {
   if (millis() - previousMillis > 1000L) {
     previousMillis = millis();
 
-    // Update DHT22 readings and history every 5 seconds to keep the chart aligned with real data points.
-    if (g_last_sensor_refresh_ms == 0 || (uint32_t)(previousMillis - g_last_sensor_refresh_ms) >= 5000UL) {
+    //  history every 10 seconds.
+    if (g_last_sensor_refresh_ms == 0 || (uint32_t)(previousMillis - g_last_sensor_refresh_ms) >= 10000UL) {
       g_last_sensor_refresh_ms = previousMillis;
-      sensorOk = get_dht_values();
-      if (!sensorOk) {
-        sensorError++;
-        if (sensorError > 9) {
-          // Initialize DHT sensor on pin GPIO27
-          LV_LOG_USER("DHT22 sensor error count exceeded threshold, reinitializing sensor...");
-          g_dht.setup(DHT22_PIN, DHTesp::DHT22);
-          sensorError = 0;
-        }
-      } else {
-        compute_pid_and_drive_output();
-      }
 
       // Update WebSocket clients with current state when fresh sensor data is available.
-      webSocketSendState((uint8_t)g_websocket_client_num);
+      if (notifyWebSocket && g_websocket_client_num >= 0) {
+        webSocketSendState((uint8_t)g_websocket_client_num);
+        notifyWebSocket = false;
+      }
 
       if (must_be_saved) {
         save_pid_settings();
@@ -619,10 +682,20 @@ void loop() {
       currentTime = String(temp);
     }
 
-    // update all graphical widgets.
+    // update all graphical widgets every 1 second.
     if (xSemaphoreTake(guiMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
       refresh_widget_lcd();
       xSemaphoreGive(guiMutex);
+    }
+
+    // Start or RE-start task to get temperature
+    if (dhtTaskHandle == NULL) {
+      startTempTask();
+    }
+
+    if (testGraph) {
+      testGraph = false;
+      dhtMeasurement();
     }
 
   } // end seconde.
